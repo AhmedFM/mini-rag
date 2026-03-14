@@ -1,0 +1,48 @@
+As some of you may be aware, I have spent many of the last months rewriting Channels to be entirely based on Python 3 and its asynchronous features (asyncio).
+
+Python's async framework is actually relatively simple when you treat it at face value, but a lot of tutorials and documentation discuss it in minute implementation detail, so I wanted to make a higher-level overview that deliberately ignores some of the small facts and focuses on the practicalities of writing projects that mix both kinds of code.
+Two Worlds
+
+That first part is the most critical thing to understand - Python code can now basically run in one of two "worlds", either synchronous or asynchronous. You should think of them as relatively separate, having different libraries and calling styles but sharing variables and syntax.
+
+You can't use a synchronous database library like mysql-python directly from async code; similarly, you can't use an async Redis library like aioredis directly from sync code. There are ways to do both, but you need to explicitly cross into the other world to run code from it.
+
+In the synchronous world, the Python that's been around for decades, you call functions directly and everything gets processed as it's written on screen. Your only built-in option for running code in parallel in the same process is threads.
+
+In the asynchronous world, things change around a bit. Everything runs on a central event loop, which is a bit of core code that lets you run several coroutines at once. Coroutines run synchronously until they hit an await and then they pause, give up control to the event loop, and something else can happen.
+
+This means that synchronous and asynchronous functions/callables are different types - you can't just mix and match them. Try to await a sync function and you'll see Python complain, forget to await an async function and you'll get back a coroutine object rather than the result you wanted.
+
+You actually don't need to know the fine details of how it all works to use it - just know that coroutines have to explicitly give up control via an await. This is different to threads or greenlets, which can context-switch at any time.
+
+If you block a coroutine synchronously - maybe you use time.sleep(10) rather than await asyncio.sleep(10) - you don't return control to the event loop, and you'll hold up the entire process and nothing else can happen. On the plus side, nothing else can run while your code is moving through from one await call to the next, making race conditions harder.
+
+This is called cooperative multitasking, and while it has many upsides, this silent failure mode is its main design issue. If you use a blocking synchronous call by mistake, nothing will explicitly fail, but things will just run mysteriously slowly. Python has a debug mode that will warn you about things blocking for too long, along with other common errors, but be aware of one thing - writing explicitly asynchronous code is harder than writing synchronous code.
+
+This is one of the reasons Channels gives you the choice, rather than forcing you into always writing async; sync code is easier to write, generally safer, and has many more libraries to choose from.
+
+You should think of your codebase as comprised of pieces of either sync code or async code - anything inside an async def is async code, anything else (including the main body of a Python file or class) is synchronous code. Notably, __init__ must always be synchronous even if all the class' methods are asynchronous.
+Function Calls
+
+So, now we have looked at the two different worlds, let's look at the main thing that can bridge between them - function calls. Inside of an async or sync function, you can write basic code as normal, but as soon as you call a function, you have the potential to switch over.
+
+There are four cases:
+
+    Calling sync code from sync code. This is just a normal function call - like time.sleep(10). Nothing risky or special about this.
+    Calling async code from async code. You have to use await here, so you would do await asyncio.sleep(10)
+    Calling sync code from async code. You can do this, but as I said above, it will block the whole process and make things mysteriously slow, and you shouldn't. Instead, you need to give the sync code its own thread.
+    Calling async code from sync code. Trying to even use await inside a synchronous function is a syntax error in Python, so to do this you need to make an event loop for the code to run inside.
+
+Let's dive deeper into each of the cases and what is actually happening.
+Sync From Sync
+
+This is standard Python - you call an object, Python blocks and moves into the called code, runs it, and then returns the result to the caller and unblocks it.
+Async From Async
+
+Now, things start to get interesting. When you have an asynchronous function (coroutine) in Python, you declare it with async def, which changes how its call behaves.
+
+In particular, calling it will immediately return a coroutine object, which basically says "I can run the coroutine with the arguments you called with and return a result when you await me".
+
+The code in the target function isn't called yet - this is merely a promise that the code will run and you'll get a result back, but you need to give it to the event loop to do that.
+
+Luckily, Python has a built in statement to give a coroutine to the event loop and get the result back - await. That means that when you say await asyncio.sleep(10), you are making a promise that the sleep function will run, and then passing it up to the event loop and waiting for the result. Let's look at an example:

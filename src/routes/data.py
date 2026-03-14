@@ -16,19 +16,17 @@ data_router = APIRouter(
 
 @data_router.post("/upload/{project_id}")
 async def upload_data(project_id: str, file: UploadFile,
-                      app_settings: Settings = Depends(get_settings)):
-        
+                    app_settings: Settings = Depends(get_settings)):
     
-    # validate the file properties
     data_controller = DataController()
-
-    is_valid, result_signal = data_controller.validate_uploaded_file(file=file)
+    
+    is_valid, message = data_controller.validate_uploaded_file(file=file)
 
     if not is_valid:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
-                "signal": result_signal
+                "signal": message
             }
         )
 
@@ -37,17 +35,16 @@ async def upload_data(project_id: str, file: UploadFile,
         orig_file_name=file.filename,
         project_id=project_id
     )
-
+    
     try:
         async with aiofiles.open(file_path, "wb") as f:
             while chunk := await file.read(app_settings.FILE_DEFAULT_CHUNK_SIZE):
                 await f.write(chunk)
+
     except Exception as e:
-
-        logger.error(f"Error while uploading file: {e}")
-
+        logger.error(f"Error occurred while uploading file: {e}")
         return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "signal": ResponseSignal.FILE_UPLOAD_FAILED.value
             }
